@@ -216,7 +216,8 @@ class RealVADVideoDataset(Dataset):
 
 def create_realvad_video_dataloaders(root_dir, batch_size=32, 
                                    input_size=256, multi_scale=False, scale_range=(256, 320),
-                                   panelist_ids=None, validation_split=0.1, shuffle=True):
+                                   panelist_ids=None, validation_split=0.1, shuffle=True,
+                                   num_workers=0, pin_memory=False):
     """
     Create train and validation dataloaders for the RealVAD dataset using the original video.
     
@@ -229,6 +230,8 @@ def create_realvad_video_dataloaders(root_dir, batch_size=32,
         panelist_ids: List of panelist IDs to include (1-9). If None, use all panelists.
         validation_split: Fraction of data to use for validation
         shuffle: Whether to shuffle the data
+        num_workers: Number of worker processes for data loading
+        pin_memory: Whether to pin memory for faster GPU transfer
         
     Returns:
         train_loader: DataLoader for training
@@ -254,7 +257,9 @@ def create_realvad_video_dataloaders(root_dir, batch_size=32,
     )
     
     # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle, 
+                            num_workers=num_workers, pin_memory=pin_memory)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, 
+                          num_workers=num_workers, pin_memory=pin_memory)
     
     return train_loader, val_loader 

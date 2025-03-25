@@ -5,6 +5,7 @@ import torch.optim as optim
 import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
+from torch.cuda.amp import autocast, GradScaler
 
 from src.config import Config
 from src.models.resnet_vad import ResNetVAD
@@ -13,7 +14,7 @@ from src.data.realvad_dataset import create_realvad_video_dataloaders
 
 def train_resnet_vad(train_loader, val_loader, model, optimizer, criterion, device, num_epochs, output_dir):
     """
-    Train the ResNet VAD model.
+    Train the ResNet VAD model with GPU optimizations.
     
     Args:
         train_loader: DataLoader for training
@@ -37,6 +38,12 @@ def train_resnet_vad(train_loader, val_loader, model, optimizer, criterion, devi
     # Keep track of best validation accuracy
     best_val_acc = 0.0
     
+    # Initialize gradient scaler for mixed precision training
+    scaler = GradScaler()
+    
+    # Gradient accumulation steps (effective batch size = batch_size * gradient_accumulation_steps)
+    gradient_accumulation_steps = 4
+    
     # Training loop
     for epoch in range(num_epochs):
         # Training phase
@@ -45,22 +52,31 @@ def train_resnet_vad(train_loader, val_loader, model, optimizer, criterion, devi
         train_correct = 0
         train_total = 0
         
-        for inputs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Train)"):
-            inputs, labels = inputs.to(device), labels.to(device)
+        # Reset optimizer gradients
+        optimizer.zero_grad()
+        
+        for batch_idx, (inputs, labels) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Train)")):
+            inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
             
-            # Zero the parameter gradients
-            optimizer.zero_grad()
+            # Mixed precision training
+            with autocast():
+                # Forward pass
+                outputs, _ = model(inputs)
+                loss = criterion(outputs, labels)
+                # Scale loss for gradient accumulation
+                loss = loss / gradient_accumulation_steps
             
-            # Forward pass
-            outputs, _ = model(inputs)
-            loss = criterion(outputs, labels)
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
             
-            # Backward pass and optimize
-            loss.backward()
-            optimizer.step()
+            # Update weights if we've accumulated enough gradients
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
             
             # Statistics
-            train_loss += loss.item() * inputs.size(0)
+            train_loss += loss.item() * inputs.size(0) * gradient_accumulation_steps
             _, predicted = torch.max(outputs, 1)
             train_total += labels.size(0)
             train_correct += (predicted == labels).sum().item()
@@ -77,11 +93,12 @@ def train_resnet_vad(train_loader, val_loader, model, optimizer, criterion, devi
         
         with torch.no_grad():
             for inputs, labels in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Val)"):
-                inputs, labels = inputs.to(device), labels.to(device)
+                inputs, labels = inputs.to(device, non_blocking=True), labels.to(device, non_blocking=True)
                 
-                # Forward pass
-                outputs, _ = model(inputs)
-                loss = criterion(outputs, labels)
+                # Forward pass with mixed precision
+                with autocast():
+                    outputs, _ = model(inputs)
+                    loss = criterion(outputs, labels)
                 
                 # Statistics
                 val_loss += loss.item() * inputs.size(0)
@@ -125,6 +142,10 @@ def main():
     # Set device
     if Config.DEVICE == 'cuda' and torch.cuda.is_available():
         device = torch.device('cuda')
+        # Enable cuDNN benchmarking for faster training
+        torch.backends.cudnn.benchmark = True
+        # Enable cuDNN deterministic mode for reproducibility
+        torch.backends.cudnn.deterministic = True
     elif Config.DEVICE == 'mps' and hasattr(torch, 'backends') and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         device = torch.device('mps')
     else:
@@ -139,7 +160,7 @@ def main():
     print("Loading RealVAD dataset from video...")
     realvad_dir = os.path.join(Config.DATA_ROOT, 'videos', 'RealVAD')
     
-    # Create dataloaders using RealVAD video dataset
+    # Create dataloaders using RealVAD video dataset with optimized settings
     train_loader, val_loader = create_realvad_video_dataloaders(
         root_dir=realvad_dir,
         batch_size=Config.BATCH_SIZE,
@@ -147,7 +168,9 @@ def main():
         multi_scale=Config.USE_MULTI_SCALE,
         scale_range=Config.MULTI_SCALE_RANGE,
         panelist_ids=None,  # Use all panelists
-        validation_split=Config.VALIDATION_SPLIT
+        validation_split=Config.VALIDATION_SPLIT,
+        num_workers=8,  # Increased number of workers
+        pin_memory=True  # Enable pin_memory for faster GPU transfer
     )
     
     print(f"Dataset loaded: {len(train_loader.dataset)} training samples, {len(val_loader.dataset)} validation samples")
@@ -162,6 +185,15 @@ def main():
         model.load_state_dict(torch.load(latest_checkpoint_path))
     
     model = model.to(device)
+    
+    # Enable gradient checkpointing for memory efficiency
+    if hasattr(model, 'enable_checkpointing'):
+        model.enable_checkpointing()
+    
+    # Compile model for PyTorch 2.0+ optimizations if available
+    if hasattr(torch, 'compile'):
+        print("Compiling model for PyTorch 2.0+ optimizations...")
+        model = torch.compile(model)
     
     # Define loss function and optimizer
     criterion = nn.CrossEntropyLoss()

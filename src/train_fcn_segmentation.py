@@ -6,6 +6,7 @@ import numpy as np
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
+from torch.cuda.amp import autocast, GradScaler
 import cv2
 
 from src.config import Config
@@ -38,7 +39,7 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
         for di in tqdm(dynamic_images, desc="Generating CAMs"):
             # Convert to tensor and normalize
             img = torch.from_numpy(di.transpose(2, 0, 1)).float() / 255.0
-            img = img.to(device)
+            img = img.to(device, non_blocking=True)
             
             # Normalize with ImageNet mean and std
             mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(device)
@@ -48,8 +49,9 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
             # Add batch dimension
             img = img.unsqueeze(0)
             
-            # Generate CAMs
-            speaking_cam, not_speaking_cam, logits = resnet_model.get_class_activation_maps(img)
+            # Generate CAMs with mixed precision
+            with autocast():
+                speaking_cam, not_speaking_cam, logits = resnet_model.get_class_activation_maps(img)
             
             # Get prediction
             pred = torch.argmax(logits, dim=1).item()
@@ -62,7 +64,7 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
 
 def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion, device, num_epochs, output_dir):
     """
-    Train the FCN segmentation model.
+    Train the FCN segmentation model with GPU optimizations.
     
     Args:
         train_loader: DataLoader for training
@@ -86,28 +88,43 @@ def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion
     # Keep track of best validation loss
     best_val_loss = float('inf')
     
+    # Initialize gradient scaler for mixed precision training
+    scaler = GradScaler()
+    
+    # Gradient accumulation steps (effective batch size = batch_size * gradient_accumulation_steps)
+    gradient_accumulation_steps = 4
+    
     # Training loop
     for epoch in range(num_epochs):
         # Training phase
         model.train()
         train_loss = 0.0
         
-        for inputs, masks in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Train)"):
-            inputs, masks = inputs.to(device), masks.to(device)
+        # Reset optimizer gradients
+        optimizer.zero_grad()
+        
+        for batch_idx, (inputs, masks) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Train)")):
+            inputs, masks = inputs.to(device, non_blocking=True), masks.to(device, non_blocking=True)
             
-            # Zero the parameter gradients
-            optimizer.zero_grad()
+            # Mixed precision training
+            with autocast():
+                # Forward pass
+                outputs = model(inputs)
+                loss = criterion(outputs, masks)
+                # Scale loss for gradient accumulation
+                loss = loss / gradient_accumulation_steps
             
-            # Forward pass
-            outputs = model(inputs)
-            loss = criterion(outputs, masks)
+            # Backward pass with gradient scaling
+            scaler.scale(loss).backward()
             
-            # Backward pass and optimize
-            loss.backward()
-            optimizer.step()
+            # Update weights if we've accumulated enough gradients
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
             
             # Statistics
-            train_loss += loss.item() * inputs.size(0)
+            train_loss += loss.item() * inputs.size(0) * gradient_accumulation_steps
         
         # Calculate training metrics
         train_loss = train_loss / len(train_loader.dataset)
@@ -118,11 +135,12 @@ def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion
         
         with torch.no_grad():
             for inputs, masks in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Val)"):
-                inputs, masks = inputs.to(device), masks.to(device)
+                inputs, masks = inputs.to(device, non_blocking=True), masks.to(device, non_blocking=True)
                 
-                # Forward pass
-                outputs = model(inputs)
-                loss = criterion(outputs, masks)
+                # Forward pass with mixed precision
+                with autocast():
+                    outputs = model(inputs)
+                    loss = criterion(outputs, masks)
                 
                 # Statistics
                 val_loss += loss.item() * inputs.size(0)
@@ -202,6 +220,10 @@ def main():
     # Set device
     if Config.DEVICE == 'cuda' and torch.cuda.is_available():
         device = torch.device('cuda')
+        # Enable cuDNN benchmarking for faster training
+        torch.backends.cudnn.benchmark = True
+        # Enable cuDNN deterministic mode for reproducibility
+        torch.backends.cudnn.deterministic = True
     elif Config.DEVICE == 'mps' and hasattr(torch, 'backends') and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         device = torch.device('mps')
     else:
@@ -254,9 +276,21 @@ def main():
         dataset, [train_size, val_size]
     )
     
-    # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=Config.BATCH_SIZE, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=Config.BATCH_SIZE, shuffle=False)
+    # Create dataloaders with optimized settings
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=Config.BATCH_SIZE, 
+        shuffle=True,
+        num_workers=8,
+        pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=Config.BATCH_SIZE, 
+        shuffle=False,
+        num_workers=8,
+        pin_memory=True
+    )
     
     print(f"Dataset prepared: {len(train_loader.dataset)} training samples, {len(val_loader.dataset)} validation samples")
     
@@ -264,6 +298,15 @@ def main():
     print("Initializing FCN model...")
     model = FCN(num_classes=3)  # 3 classes: speaking, not-speaking, background
     model = model.to(device)
+    
+    # Enable gradient checkpointing for memory efficiency
+    if hasattr(model, 'enable_checkpointing'):
+        model.enable_checkpointing()
+    
+    # Compile model for PyTorch 2.0+ optimizations if available
+    if hasattr(torch, 'compile'):
+        print("Compiling model for PyTorch 2.0+ optimizations...")
+        model = torch.compile(model)
     
     # Define loss function and optimizer
     criterion = nn.CrossEntropyLoss()
