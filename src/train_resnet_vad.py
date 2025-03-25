@@ -154,6 +154,13 @@ def main():
     
     # Initialize model
     model = ResNetVAD(num_classes=2, pretrained=True)
+    
+    # Check if latest checkpoint exists and load it
+    latest_checkpoint_path = os.path.join(Config.OUTPUT_DIR, 'latest_resnet_vad.pth')
+    if os.path.exists(latest_checkpoint_path):
+        print(f"Loading checkpoint from {latest_checkpoint_path}")
+        model.load_state_dict(torch.load(latest_checkpoint_path))
+    
     model = model.to(device)
     
     # Define loss function and optimizer
