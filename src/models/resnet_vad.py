@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torchvision.models as models
+from torchvision.models.resnet import ResNet50_Weights
 from torch.nn import functional as F
 import numpy as np
 
@@ -13,7 +14,7 @@ class ResNetVAD(nn.Module):
         super(ResNetVAD, self).__init__()
         
         # Load pre-trained ResNet50
-        resnet = models.resnet50(pretrained=pretrained)
+        resnet = models.resnet50(weights=ResNet50_Weights.DEFAULT)
         
         # Remove the final fully connected layer
         modules = list(resnet.children())[:-2]
