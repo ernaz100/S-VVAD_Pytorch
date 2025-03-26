@@ -278,10 +278,23 @@ def main():
     print("Loading trained ResNet VAD model...")
     resnet_model = ResNetVAD(num_classes=2, pretrained=False)
     try:
-        resnet_model.load_state_dict(torch.load(os.path.join(Config.OUTPUT_DIR, 'best_resnet_vad.pth'), map_location=device))
+        # Load the state dict
+        state_dict = torch.load(os.path.join(Config.OUTPUT_DIR, 'best_resnet_vad.pth'), map_location=device)
+        
+        # Remove '_orig_mod.' prefix from state dict keys if present
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith('_orig_mod.'):
+                new_state_dict[k[10:]] = v  # Remove '_orig_mod.' prefix
+            else:
+                new_state_dict[k] = v
+        
+        # Load the modified state dict
+        resnet_model.load_state_dict(new_state_dict)
         print("Successfully loaded ResNet VAD model.")
-    except:
-        print("Failed to load ResNet VAD model. Make sure to train it first using train_resnet_vad.py")
+    except Exception as e:
+        print(f"Failed to load ResNet VAD model: {str(e)}")
+        print("Make sure to train it first using train_resnet_vad.py")
         return
     
     resnet_model = resnet_model.to(device)
