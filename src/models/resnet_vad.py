@@ -73,6 +73,9 @@ class ResNetVAD(nn.Module):
             requires_grad[name] = param.requires_grad
             param.requires_grad = True
         
+        # Enable gradients for input
+        x.requires_grad_(True)
+        
         # Forward pass
         logits, features = self.forward(x)
         if class_idx is None:
