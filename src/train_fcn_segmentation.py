@@ -22,7 +22,7 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
     Generate Class Activation Maps (CAMs) using the trained ResNet VAD model.
     
     Args:
-        dynamic_images: List of dynamic images
+        dynamic_images: Batch of dynamic images (tensor of shape B, C, H, W)
         resnet_model: Trained ResNet VAD model
         device: Device to use (cpu or cuda)
         
@@ -37,29 +37,21 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
     predictions = []
     
     with torch.no_grad():
-        for di in tqdm(dynamic_images, desc="Generating CAMs"):
-            # Convert to tensor and normalize
-            img = torch.from_numpy(di.transpose(2, 0, 1)).float() / 255.0
-            img = img.to(device, non_blocking=True)
-            
-            # Normalize with ImageNet mean and std
-            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1).to(device)
-            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1).to(device)
-            img = (img - mean) / std
-            
-            # Add batch dimension
-            img = img.unsqueeze(0)
-            
-            # Generate CAMs with mixed precision
-            with autocast():
-                speaking_cam, not_speaking_cam, logits = resnet_model.get_class_activation_maps(img)
-            
-            # Get prediction
-            pred = torch.argmax(logits, dim=1).item()
-            
-            speaking_cams.append(speaking_cam)
-            not_speaking_cams.append(not_speaking_cam)
-            predictions.append(pred)
+        # Inputs are already tensors in the correct format (B, C, H, W)
+        # Just need to ensure they're on the correct device
+        inputs = dynamic_images.to(device, non_blocking=True)
+        
+        # Generate CAMs with mixed precision
+        with autocast():
+            speaking_cam, not_speaking_cam, logits = resnet_model.get_class_activation_maps(inputs)
+        
+        # Get predictions
+        preds = torch.argmax(logits, dim=1)
+        
+        # Convert to lists
+        speaking_cams = [cam.cpu().numpy() for cam in speaking_cam]
+        not_speaking_cams = [cam.cpu().numpy() for cam in not_speaking_cam]
+        predictions = preds.cpu().numpy().tolist()
     
     return speaking_cams, not_speaking_cams, predictions
 
@@ -103,9 +95,13 @@ def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion
             # Convert CAMs to weak labels (0: background, 1: speaking, 2: not-speaking)
             weak_labels = torch.zeros((inputs.size(0), inputs.size(2), inputs.size(3)), dtype=torch.long, device=device)
             for i in range(inputs.size(0)):
+                # Convert numpy arrays to tensors
+                speaking_cam = torch.from_numpy(speaking_cams[i]).to(device)
+                not_speaking_cam = torch.from_numpy(not_speaking_cams[i]).to(device)
+                
                 # Normalize CAMs to [0, 1]
-                speaking_cam = (speaking_cams[i] - speaking_cams[i].min()) / (speaking_cams[i].max() - speaking_cams[i].min())
-                not_speaking_cam = (not_speaking_cams[i] - not_speaking_cams[i].min()) / (not_speaking_cams[i].max() - not_speaking_cams[i].min())
+                speaking_cam = (speaking_cam - speaking_cam.min()) / (speaking_cam.max() - speaking_cam.min())
+                not_speaking_cam = (not_speaking_cam - not_speaking_cam.min()) / (not_speaking_cam.max() - not_speaking_cam.min())
                 
                 # Create weak labels based on CAM thresholds
                 weak_labels[i] = torch.where(speaking_cam > 0.5, torch.tensor(1, device=device),
@@ -171,8 +167,15 @@ def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion
                 # Convert CAMs to weak labels
                 weak_labels = torch.zeros((inputs.size(0), inputs.size(2), inputs.size(3)), dtype=torch.long, device=device)
                 for i in range(inputs.size(0)):
-                    speaking_cam = (speaking_cams[i] - speaking_cams[i].min()) / (speaking_cams[i].max() - speaking_cams[i].min())
-                    not_speaking_cam = (not_speaking_cams[i] - not_speaking_cams[i].min()) / (not_speaking_cams[i].max() - not_speaking_cams[i].min())
+                    # Convert numpy arrays to tensors
+                    speaking_cam = torch.from_numpy(speaking_cams[i]).to(device)
+                    not_speaking_cam = torch.from_numpy(not_speaking_cams[i]).to(device)
+                    
+                    # Normalize CAMs to [0, 1]
+                    speaking_cam = (speaking_cam - speaking_cam.min()) / (speaking_cam.max() - speaking_cam.min())
+                    not_speaking_cam = (not_speaking_cam - not_speaking_cam.min()) / (not_speaking_cam.max() - not_speaking_cam.min())
+                    
+                    # Create weak labels based on CAM thresholds
                     weak_labels[i] = torch.where(speaking_cam > 0.5, torch.tensor(1, device=device),
                                                torch.where(not_speaking_cam > 0.5, torch.tensor(2, device=device),
                                                          torch.tensor(0, device=device)))
