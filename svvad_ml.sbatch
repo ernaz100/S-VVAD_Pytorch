@@ -22,17 +22,26 @@ nvidia-smi # only if you requested gpus
 ls $WORK # not necessary just here to illustrate that $WORK is available here
 
 # Setup Phase
-# Copy Singularity image to local scratch space for better performance
 SINGULARITY_IMAGE="/home/ponsmoll/pba794/S-VVAD_Pytorch/image.sif"
 
-SCRATCH_DIR="/scratch_local/ponsmoll/pba794/"
+# Use SLURM's automatic temporary directory
+SCRATCH_DIR="${TMPDIR}"
 
-# Copy Singularity image to scratch
-cp ${SINGULARITY_IMAGE} ${SCRATCH_DIR}/
+echo "Using temporary directory: ${SCRATCH_DIR}"
+
+# Copy Singularity image to scratch with verification
+echo "Copying Singularity image to scratch..."
+cp -v "${SINGULARITY_IMAGE}" "${SCRATCH_DIR}/"
+
+# Verify the copy was successful
+if [ ! -f "${SCRATCH_DIR}/image.sif" ]; then
+    echo "Error: Failed to copy Singularity image to scratch directory"
+    exit 1
+fi
 
 # Run the Python script within Singularity container
 singularity exec --nv \
-    --bind ${SCRATCH_DIR}:/scratch \
-    ${SCRATCH_DIR}/image.sif \
+    --bind "${SCRATCH_DIR}":/scratch \
+    "${SCRATCH_DIR}/image.sif" \
     python3 -m src.train_resnet_vad
 
