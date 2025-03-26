@@ -23,8 +23,9 @@ ls $WORK # not necessary just here to illustrate that $WORK is available here
 
 # Setup Phase
 # Copy Singularity image to local scratch space for better performance
-SINGULARITY_IMAGE="/path/to/your/image.sif"
-SCRATCH_DIR="/scratch_local/${SLURM_JOB_ID}"
+SINGULARITY_IMAGE="/home/ponsmoll/pba794/S-VVAD_Pytorch/image.sif"
+
+SCRATCH_DIR="/scratch_local/ponsmoll/pba794/${SLURM_JOB_ID}"
 
 # Create scratch directory
 mkdir -p ${SCRATCH_DIR}
