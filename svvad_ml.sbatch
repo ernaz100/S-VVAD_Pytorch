@@ -39,8 +39,8 @@ if [ ! -f "${SCRATCH_DIR}/image.sif" ]; then
     exit 1
 fi
 
-# Run the Python script within Singularity container
-singularity exec --nv \
+# Run the Python script within container
+apptainer exec --nv \
     --bind "${SCRATCH_DIR}":/scratch \
     "${SCRATCH_DIR}/image.sif" \
     python3 -m src.train_resnet_vad
