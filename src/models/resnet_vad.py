@@ -60,6 +60,12 @@ class ResNetVAD(nn.Module):
             cam: Grad-CAM heatmap
             logits: Model prediction logits
         """
+        # Store original requires_grad settings
+        requires_grad = {}
+        for name, param in self.named_parameters():
+            requires_grad[name] = param.requires_grad
+            param.requires_grad = True
+        
         # Forward pass
         logits, features = self.forward(x)
         if class_idx is None:
@@ -89,6 +95,10 @@ class ResNetVAD(nn.Module):
         # Normalize to [0, 1]
         cam = cam - cam.min()
         cam = cam / (cam.max() + 1e-7)
+        
+        # Restore original requires_grad settings
+        for name, param in self.named_parameters():
+            param.requires_grad = requires_grad[name]
         
         return cam, logits
     
