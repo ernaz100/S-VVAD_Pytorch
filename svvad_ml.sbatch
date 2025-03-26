@@ -2,7 +2,7 @@
 
 # Sample Slurm job script for Galvani 
 
-#SBATCH -J changeme                # Job name
+#SBATCH -J svvad                # Job name
 #SBATCH --ntasks=1                 # Number of tasks
 #SBATCH --cpus-per-task=8          # Number of CPU cores per task
 #SBATCH --nodes=1                  # Ensure that all cores are on the same machine with nodes=1
@@ -10,8 +10,8 @@
 #SBATCH --time=0-23:59             # Allowed runtime in D-HH:MM
 #SBATCH --gres=gpu:1               # (optional) Requesting type and number of GPUs
 #SBATCH --mem=50G                  # Total memory pool for all cores (see also --mem-per-cpu); exceeding this number will cause your job to fail.
-#SBATCH --output=/S-VVAD_Pytorch/myjob-%j.out       # File to which STDOUT will be written - make sure this is not on $HOME
-#SBATCH --error=/S-VVAD_Pytorch/myjob-%j.err        # File to which STDERR will be written - make sure this is not on $HOME
+#SBATCH --output=/home/ponsmoll/pba794/S-VVAD_Pytorch/myjob-%j.out       # File to which STDOUT will be written - make sure this is not on $HOME
+#SBATCH --error=/home/ponsmoll/pba794/S-VVAD_Pytorch/myjob-%j.err        # File to which STDERR will be written - make sure this is not on $HOME
 #SBATCH --mail-type=ALL            # Type of email notification- BEGIN,END,FAIL,ALL
 #SBATCH --mail-user=eric.nazarenus@student.uni-tuebingen.de   # Email to which notifications will be sent
 

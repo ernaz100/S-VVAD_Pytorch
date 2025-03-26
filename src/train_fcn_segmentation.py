@@ -8,12 +8,13 @@ from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast, GradScaler
 import cv2
+import torch.nn.functional as F
 
 from src.config import Config
 from src.models.resnet_vad import ResNetVAD
 from src.models.fcn_segmentation import FCN, create_fcn_from_cams
 from src.data.dataset import FCNDataset
-from src.data.realvad_dataset import RealVADDataset
+from src.data.realvad_dataset import RealVADVideoDataset
 from src.utils.dynamic_images import generate_dynamic_images_from_video
 
 def generate_cams_with_resnet(dynamic_images, resnet_model, device):
@@ -62,22 +63,11 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
     
     return speaking_cams, not_speaking_cams, predictions
 
-def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion, device, num_epochs, output_dir):
+def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion, device, num_epochs, output_dir, resnet_model):
     """
-    Train the FCN segmentation model with GPU optimizations.
-    
-    Args:
-        train_loader: DataLoader for training
-        val_loader: DataLoader for validation
-        model: FCN segmentation model
-        optimizer: Optimizer
-        criterion: Loss function
-        device: Device to use (cpu or cuda)
-        num_epochs: Number of epochs to train for
-        output_dir: Directory to save model checkpoints
-        
-    Returns:
-        trained_model: Trained FCN segmentation model
+    Train the FCN segmentation model with weak supervision from ResNet VAD.
+    As described in the S-VVAD paper, we use the ResNet VAD predictions as weak labels
+    for training the segmentation model.
     """
     # Create tensorboard writer
     writer = SummaryWriter(os.path.join(output_dir, 'logs_fcn'))
@@ -103,14 +93,52 @@ def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion
         # Reset optimizer gradients
         optimizer.zero_grad()
         
-        for batch_idx, (inputs, masks) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Train)")):
-            inputs, masks = inputs.to(device, non_blocking=True), masks.to(device, non_blocking=True)
+        for batch_idx, (inputs, _) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Train)")):
+            inputs = inputs.to(device, non_blocking=True)
+            
+            # Generate CAMs using ResNet VAD
+            with torch.no_grad():
+                speaking_cams, not_speaking_cams, _ = generate_cams_with_resnet(inputs, resnet_model, device)
+            
+            # Convert CAMs to weak labels (0: background, 1: speaking, 2: not-speaking)
+            weak_labels = torch.zeros((inputs.size(0), inputs.size(2), inputs.size(3)), dtype=torch.long, device=device)
+            for i in range(inputs.size(0)):
+                # Normalize CAMs to [0, 1]
+                speaking_cam = (speaking_cams[i] - speaking_cams[i].min()) / (speaking_cams[i].max() - speaking_cams[i].min())
+                not_speaking_cam = (not_speaking_cams[i] - not_speaking_cams[i].min()) / (not_speaking_cams[i].max() - not_speaking_cams[i].min())
+                
+                # Create weak labels based on CAM thresholds
+                weak_labels[i] = torch.where(speaking_cam > 0.5, torch.tensor(1, device=device),
+                                           torch.where(not_speaking_cam > 0.5, torch.tensor(2, device=device),
+                                                     torch.tensor(0, device=device)))
             
             # Mixed precision training
             with autocast():
-                # Forward pass
+                # Forward pass through FCN
                 outputs = model(inputs)
-                loss = criterion(outputs, masks)
+                
+                # Apply softmax to get probabilities
+                probs = F.softmax(outputs, dim=1)
+                
+                # Get speaking and not-speaking probabilities
+                speaking_probs = probs[:, 1]  # Class 1 is speaking
+                not_speaking_probs = probs[:, 0]  # Class 0 is not-speaking
+                
+                # Compute segmentation loss using weak labels
+                loss = criterion(outputs, weak_labels)
+                
+                # Add regularization to encourage smooth segmentation
+                smoothness_loss = torch.mean(torch.abs(speaking_probs[:, :, :, 1:] - speaking_probs[:, :, :, :-1])) + \
+                                torch.mean(torch.abs(speaking_probs[:, :, 1:, :] - speaking_probs[:, :, :-1, :])) + \
+                                torch.mean(torch.abs(not_speaking_probs[:, :, :, 1:] - not_speaking_probs[:, :, :, :-1])) + \
+                                torch.mean(torch.abs(not_speaking_probs[:, :, 1:, :] - not_speaking_probs[:, :, :-1, :]))
+                
+                # Add CAM consistency loss
+                cam_consistency_loss = F.mse_loss(speaking_probs, speaking_cams) + F.mse_loss(not_speaking_probs, not_speaking_cams)
+                
+                # Combine losses
+                loss = loss + 0.1 * smoothness_loss + 0.1 * cam_consistency_loss
+                
                 # Scale loss for gradient accumulation
                 loss = loss / gradient_accumulation_steps
             
@@ -134,13 +162,25 @@ def train_fcn_segmentation(train_loader, val_loader, model, optimizer, criterion
         val_loss = 0.0
         
         with torch.no_grad():
-            for inputs, masks in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Val)"):
-                inputs, masks = inputs.to(device, non_blocking=True), masks.to(device, non_blocking=True)
+            for inputs, _ in tqdm(val_loader, desc=f"Epoch {epoch+1}/{num_epochs} (Val)"):
+                inputs = inputs.to(device, non_blocking=True)
+                
+                # Generate CAMs for validation
+                speaking_cams, not_speaking_cams, _ = generate_cams_with_resnet(inputs, resnet_model, device)
+                
+                # Convert CAMs to weak labels
+                weak_labels = torch.zeros((inputs.size(0), inputs.size(2), inputs.size(3)), dtype=torch.long, device=device)
+                for i in range(inputs.size(0)):
+                    speaking_cam = (speaking_cams[i] - speaking_cams[i].min()) / (speaking_cams[i].max() - speaking_cams[i].min())
+                    not_speaking_cam = (not_speaking_cams[i] - not_speaking_cams[i].min()) / (not_speaking_cams[i].max() - not_speaking_cams[i].min())
+                    weak_labels[i] = torch.where(speaking_cam > 0.5, torch.tensor(1, device=device),
+                                               torch.where(not_speaking_cam > 0.5, torch.tensor(2, device=device),
+                                                         torch.tensor(0, device=device)))
                 
                 # Forward pass with mixed precision
                 with autocast():
                     outputs = model(inputs)
-                    loss = criterion(outputs, masks)
+                    loss = criterion(outputs, weak_labels)
                 
                 # Statistics
                 val_loss += loss.item() * inputs.size(0)
@@ -245,27 +285,19 @@ def main():
         return
     
     resnet_model = resnet_model.to(device)
+    resnet_model.eval()  # Set to evaluation mode
     
     # Load RealVAD dataset
-    print("Loading RealVAD dynamic images...")
+    print("Loading RealVAD dataset...")
     realvad_dir = os.path.join(Config.DATA_ROOT, 'videos', 'RealVAD')
     
-    # Load dynamic images and labels
-    dynamic_images, labels = load_realvad_dynamic_images(realvad_dir)
-    print(f"Loaded {len(dynamic_images)} dynamic images.")
-    
-    # Generate CAMs using the trained ResNet VAD model
-    print("Generating CAMs for FCN training...")
-    speaking_cams, not_speaking_cams, predictions = generate_cams_with_resnet(
-        dynamic_images, resnet_model, device
+    # Create dataset with multi-scale support
+    dataset = RealVADVideoDataset(
+        root_dir=realvad_dir,
+        input_size=256,
+        multi_scale=True,
+        scale_range=(256, 320)
     )
-    
-    # Create FCN training data from CAMs
-    print("Creating FCN training data...")
-    X, y = create_fcn_from_cams(dynamic_images, speaking_cams, not_speaking_cams, device)
-    
-    # Create FCN dataset
-    dataset = FCNDataset(X, y)
     
     # Split into train and validation sets
     dataset_size = len(dataset)
@@ -322,7 +354,8 @@ def main():
         criterion,
         device,
         Config.NUM_EPOCHS,
-        Config.OUTPUT_DIR
+        Config.OUTPUT_DIR,
+        resnet_model  # Pass ResNet model for CAM generation
     )
     
     print("FCN Training completed!")
