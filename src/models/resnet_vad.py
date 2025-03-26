@@ -85,6 +85,9 @@ class ResNetVAD(nn.Module):
         # Zero gradients before backward pass
         self.zero_grad()
         
+        # Enable gradients for features
+        features.requires_grad_(True)
+        
         # Register hook for gradient saving
         features.register_hook(self.save_gradient)
         
