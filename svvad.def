@@ -1,0 +1,11 @@
+Bootstrap: docker
+From: pytorch/pytorch:latest
+
+%files
+    requirements.txt /requirements.txt
+
+%post
+    pip install -r /requirements.txt
+
+%environment
+    export LC_ALL=C

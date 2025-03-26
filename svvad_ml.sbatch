@@ -22,11 +22,21 @@ nvidia-smi # only if you requested gpus
 ls $WORK # not necessary just here to illustrate that $WORK is available here
 
 # Setup Phase
-# add possibly other setup code here, e.g.
-# - copy singularity images or datasets to local on-compute-node storage like /scratch_local
-# - loads virtual envs, like with anaconda
-# - set environment variables
-# - determine commandline arguments for `srun` calls
+# Copy Singularity image to local scratch space for better performance
+SINGULARITY_IMAGE="/path/to/your/image.sif"
+SCRATCH_DIR="/scratch_local/${SLURM_JOB_ID}"
 
-# Compute Phase
-srun python3 -m src.train_fcn_segmentation.py  # srun will automatically pickup the configuration defined via `#SBATCH` and `sbatch` command line arguments
+# Create scratch directory
+mkdir -p ${SCRATCH_DIR}
+
+# Copy Singularity image to scratch
+cp ${SINGULARITY_IMAGE} ${SCRATCH_DIR}/
+
+# Run the Python script within Singularity container
+singularity exec --nv \
+    --bind ${SCRATCH_DIR}:/scratch \
+    ${SCRATCH_DIR}/image.sif \
+    python3 -m src.train_resnet_vad
+
+# Cleanup scratch directory after job completion
+rm -rf ${SCRATCH_DIR}
