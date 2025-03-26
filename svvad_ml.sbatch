@@ -25,10 +25,7 @@ ls $WORK # not necessary just here to illustrate that $WORK is available here
 # Copy Singularity image to local scratch space for better performance
 SINGULARITY_IMAGE="/home/ponsmoll/pba794/S-VVAD_Pytorch/image.sif"
 
-SCRATCH_DIR="/scratch_local/ponsmoll/pba794/${SLURM_JOB_ID}"
-
-# Create scratch directory
-mkdir -p ${SCRATCH_DIR}
+SCRATCH_DIR="/scratch_local/ponsmoll/pba794/"
 
 # Copy Singularity image to scratch
 cp ${SINGULARITY_IMAGE} ${SCRATCH_DIR}/
@@ -39,5 +36,3 @@ singularity exec --nv \
     ${SCRATCH_DIR}/image.sif \
     python3 -m src.train_resnet_vad
 
-# Cleanup scratch directory after job completion
-rm -rf ${SCRATCH_DIR}
