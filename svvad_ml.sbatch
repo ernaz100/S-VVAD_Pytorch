@@ -44,7 +44,12 @@ module load singularity
 
 # Run the Python script within Singularity container
 singularity exec --nv \
+    --contain \
     --bind "${SCRATCH_DIR}":/scratch \
+    --bind /etc/passwd:/etc/passwd \
+    --bind /etc/group:/etc/group \
+    --bind /usr/lib64:/usr/lib64:ro \
+    --bind /lib64:/lib64:ro \
     "${SCRATCH_DIR}/image.sif" \
     python3 -m src.train_resnet_vad
 
