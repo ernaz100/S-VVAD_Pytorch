@@ -33,6 +33,9 @@ class ResNetVAD(nn.Module):
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(2048, num_classes)
         
+        # Store gradients for CAM generation
+        self.gradients = None
+        
     def forward(self, x):
         x = self.block1_2(x)
         x = self.block3(x)
@@ -47,6 +50,10 @@ class ResNetVAD(nn.Module):
         
         return x, features
     
+    def save_gradient(self, grad):
+        """Save gradients for CAM generation"""
+        self.gradients = grad
+    
     def compute_grad_cam(self, x, class_idx=None):
         """
         Compute Grad-CAM for the given input and class index.
@@ -60,9 +67,11 @@ class ResNetVAD(nn.Module):
             cam: Grad-CAM heatmap
             logits: Model prediction logits
         """
-        # Ensure input requires gradients
-        if not x.requires_grad:
-            x.requires_grad_(True)
+        # Store original requires_grad settings
+        requires_grad = {}
+        for name, param in self.named_parameters():
+            requires_grad[name] = param.requires_grad
+            param.requires_grad = True
         
         # Forward pass
         logits, features = self.forward(x)
@@ -76,11 +85,14 @@ class ResNetVAD(nn.Module):
         # Zero gradients before backward pass
         self.zero_grad()
         
+        # Register hook for gradient saving
+        features.register_hook(self.save_gradient)
+        
         # Compute gradients
         logits.backward(gradient=one_hot, retain_graph=True)
         
         # Get gradients and feature maps
-        gradients = self.get_activations_gradient()
+        gradients = self.gradients
         activations = features.detach()
         
         # Global average pooling of gradients
@@ -97,13 +109,11 @@ class ResNetVAD(nn.Module):
         cam = cam - cam.min()
         cam = cam / (cam.max() + 1e-7)
         
+        # Restore original requires_grad settings
+        for name, param in self.named_parameters():
+            param.requires_grad = requires_grad[name]
+        
         return cam, logits
-    
-    def get_activations_gradient(self):
-        """
-        Helper method to get gradients of the last convolutional layer.
-        """
-        return self.block5[-1].conv3.weight.grad
     
     def get_class_activation_maps(self, x):
         """

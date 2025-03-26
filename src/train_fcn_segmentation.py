@@ -62,6 +62,10 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
         
         # Clear gradients after each image
         resnet_model.zero_grad()
+        
+        # Disable gradients for model parameters
+        for param in resnet_model.parameters():
+            param.requires_grad = False
     
     return speaking_cams, not_speaking_cams, predictions
 
