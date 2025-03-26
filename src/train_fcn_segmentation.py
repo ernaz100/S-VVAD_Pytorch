@@ -41,17 +41,23 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
         # Just need to ensure they're on the correct device
         inputs = dynamic_images.to(device, non_blocking=True)
         
-        # Generate CAMs with mixed precision
-        with autocast():
-            speaking_cam, not_speaking_cam, logits = resnet_model.get_class_activation_maps(inputs)
-        
-        # Get predictions
+        # Forward pass to get predictions
+        logits, _ = resnet_model(inputs)
         preds = torch.argmax(logits, dim=1)
-        
-        # Convert to lists
-        speaking_cams = [cam.cpu().numpy() for cam in speaking_cam]
-        not_speaking_cams = [cam.cpu().numpy() for cam in not_speaking_cam]
         predictions = preds.cpu().numpy().tolist()
+    
+    # Compute CAMs separately since they require gradients
+    for i in range(inputs.size(0)):
+        # Get single image and ensure it requires gradients
+        img = inputs[i:i+1].detach().requires_grad_(True)
+        
+        # Compute CAMs for speaking class (class 1)
+        speaking_cam, _ = resnet_model.compute_grad_cam(img, torch.tensor([1]).to(device))
+        speaking_cams.append(speaking_cam.squeeze().cpu().numpy())
+        
+        # Compute CAMs for not-speaking class (class 0)
+        not_speaking_cam, _ = resnet_model.compute_grad_cam(img, torch.tensor([0]).to(device))
+        not_speaking_cams.append(not_speaking_cam.squeeze().cpu().numpy())
     
     return speaking_cams, not_speaking_cams, predictions
 
