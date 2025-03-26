@@ -51,8 +51,9 @@ singularity exec "${SINGULARITY_IMAGE}" python3 --version
 echo "CUDA availability:"
 singularity exec --nv "${SINGULARITY_IMAGE}" python3 -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
 
-# Run the Python script within Singularity container
+# Run the Python script within Singularity container with system libraries
 singularity exec --nv \
+    --bind /usr/lib64:/usr/lib64 \
     "${SINGULARITY_IMAGE}" \
     python3 -m src.train_resnet_vad
 
