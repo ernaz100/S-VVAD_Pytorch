@@ -52,18 +52,62 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
         for param in resnet_model.parameters():
             param.requires_grad = True
         
-        # Compute CAMs for speaking class (class 1)
-        speaking_cam, _ = resnet_model.compute_grad_cam(img, torch.tensor([1]).to(device))
-        speaking_cams.append(speaking_cam.squeeze().cpu().numpy())
+        # Forward pass with gradients enabled
+        logits, features = resnet_model(img)
         
-        # Compute CAMs for not-speaking class (class 0)
-        not_speaking_cam, _ = resnet_model.compute_grad_cam(img, torch.tensor([0]).to(device))
-        not_speaking_cams.append(not_speaking_cam.squeeze().cpu().numpy())
+        # One-hot encoding for speaking class (class 1)
+        one_hot_speaking = torch.zeros_like(logits)
+        one_hot_speaking.scatter_(1, torch.tensor([[1]]).to(device), 1.0)
         
-        # Clear gradients after each image
+        # Compute gradients for speaking class
+        logits.backward(gradient=one_hot_speaking, retain_graph=True)
+        
+        # Get gradients and feature maps
+        gradients = resnet_model.gradients
+        activations = features.detach()
+        
+        # Global average pooling of gradients
+        weights = torch.mean(gradients, dim=[2, 3], keepdim=True)
+        
+        # Weighted combination of feature maps
+        speaking_cam = torch.sum(weights * activations, dim=1, keepdim=True)
+        
+        # Apply ReLU and normalize
+        speaking_cam = F.relu(speaking_cam)
+        speaking_cam = F.interpolate(speaking_cam, size=img.shape[2:], mode='bilinear', align_corners=False)
+        speaking_cam = (speaking_cam - speaking_cam.min()) / (speaking_cam.max() + 1e-7)
+        
+        # Clear gradients
         resnet_model.zero_grad()
         
-        # Disable gradients for model parameters
+        # One-hot encoding for not-speaking class (class 0)
+        one_hot_not_speaking = torch.zeros_like(logits)
+        one_hot_not_speaking.scatter_(1, torch.tensor([[0]]).to(device), 1.0)
+        
+        # Compute gradients for not-speaking class
+        logits.backward(gradient=one_hot_not_speaking, retain_graph=True)
+        
+        # Get gradients and feature maps
+        gradients = resnet_model.gradients
+        activations = features.detach()
+        
+        # Global average pooling of gradients
+        weights = torch.mean(gradients, dim=[2, 3], keepdim=True)
+        
+        # Weighted combination of feature maps
+        not_speaking_cam = torch.sum(weights * activations, dim=1, keepdim=True)
+        
+        # Apply ReLU and normalize
+        not_speaking_cam = F.relu(not_speaking_cam)
+        not_speaking_cam = F.interpolate(not_speaking_cam, size=img.shape[2:], mode='bilinear', align_corners=False)
+        not_speaking_cam = (not_speaking_cam - not_speaking_cam.min()) / (not_speaking_cam.max() + 1e-7)
+        
+        # Store CAMs
+        speaking_cams.append(speaking_cam.squeeze().cpu().numpy())
+        not_speaking_cams.append(not_speaking_cam.squeeze().cpu().numpy())
+        
+        # Clear gradients and disable gradient computation
+        resnet_model.zero_grad()
         for param in resnet_model.parameters():
             param.requires_grad = False
     
