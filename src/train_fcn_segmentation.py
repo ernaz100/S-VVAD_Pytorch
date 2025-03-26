@@ -46,7 +46,7 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
     # Compute CAMs one at a time with gradients enabled
     for i in range(inputs.size(0)):
         # Get single image and ensure it requires gradients
-        img = inputs[i:i+1].detach().requires_grad_(True)
+        img = inputs[i:i+1].clone().detach().requires_grad_(True)
         
         # Enable gradients for model parameters
         for param in resnet_model.parameters():
