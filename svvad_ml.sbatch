@@ -37,8 +37,11 @@ cp -v "${SINGULARITY_IMAGE}" "${SCRATCH_DIR}/"
 if [ ! -f "${SCRATCH_DIR}/image.sif" ]; then
     echo "Error: Failed to copy Singularity image to scratch directory"
     exit 1
+fi
 
+# Load singularity module
 module load singularity
+
 # Run the Python script within Singularity container
 singularity exec --nv \
     --bind "${SCRATCH_DIR}":/scratch \
