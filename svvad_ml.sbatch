@@ -42,14 +42,17 @@ fi
 # Load singularity module
 module load singularity
 
+# Print some debug information
+echo "Current directory: $(pwd)"
+echo "Contents of current directory:"
+ls -la
+echo "Python version in container:"
+singularity exec "${SINGULARITY_IMAGE}" python3 --version
+echo "CUDA availability:"
+singularity exec --nv "${SINGULARITY_IMAGE}" python3 -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+
 # Run the Python script within Singularity container
 singularity exec --nv \
-    --contain \
-    --bind "${SCRATCH_DIR}":/scratch \
-    --bind /etc/passwd:/etc/passwd \
-    --bind /etc/group:/etc/group \
-    --bind /usr/lib64:/usr/lib64:ro \
-    --bind /lib64:/lib64:ro \
-    "${SCRATCH_DIR}/image.sif" \
+    "${SINGULARITY_IMAGE}" \
     python3 -m src.train_resnet_vad
 
