@@ -36,20 +36,21 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
     not_speaking_cams = []
     predictions = []
     
+    # First, get predictions without gradients
     with torch.no_grad():
-        # Inputs are already tensors in the correct format (B, C, H, W)
-        # Just need to ensure they're on the correct device
         inputs = dynamic_images.to(device, non_blocking=True)
-        
-        # Forward pass to get predictions
         logits, _ = resnet_model(inputs)
         preds = torch.argmax(logits, dim=1)
         predictions = preds.cpu().numpy().tolist()
     
-    # Compute CAMs separately since they require gradients
+    # Compute CAMs one at a time with gradients enabled
     for i in range(inputs.size(0)):
         # Get single image and ensure it requires gradients
         img = inputs[i:i+1].detach().requires_grad_(True)
+        
+        # Enable gradients for model parameters
+        for param in resnet_model.parameters():
+            param.requires_grad = True
         
         # Compute CAMs for speaking class (class 1)
         speaking_cam, _ = resnet_model.compute_grad_cam(img, torch.tensor([1]).to(device))
@@ -58,6 +59,9 @@ def generate_cams_with_resnet(dynamic_images, resnet_model, device):
         # Compute CAMs for not-speaking class (class 0)
         not_speaking_cam, _ = resnet_model.compute_grad_cam(img, torch.tensor([0]).to(device))
         not_speaking_cams.append(not_speaking_cam.squeeze().cpu().numpy())
+        
+        # Clear gradients after each image
+        resnet_model.zero_grad()
     
     return speaking_cams, not_speaking_cams, predictions
 

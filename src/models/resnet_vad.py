@@ -60,11 +60,9 @@ class ResNetVAD(nn.Module):
             cam: Grad-CAM heatmap
             logits: Model prediction logits
         """
-        # Store original requires_grad settings
-        requires_grad = {}
-        for name, param in self.named_parameters():
-            requires_grad[name] = param.requires_grad
-            param.requires_grad = True
+        # Ensure input requires gradients
+        if not x.requires_grad:
+            x.requires_grad_(True)
         
         # Forward pass
         logits, features = self.forward(x)
@@ -74,6 +72,9 @@ class ResNetVAD(nn.Module):
         # One-hot encoding of the target class
         one_hot = torch.zeros_like(logits)
         one_hot.scatter_(1, class_idx.view(-1, 1), 1.0)
+        
+        # Zero gradients before backward pass
+        self.zero_grad()
         
         # Compute gradients
         logits.backward(gradient=one_hot, retain_graph=True)
@@ -95,10 +96,6 @@ class ResNetVAD(nn.Module):
         # Normalize to [0, 1]
         cam = cam - cam.min()
         cam = cam / (cam.max() + 1e-7)
-        
-        # Restore original requires_grad settings
-        for name, param in self.named_parameters():
-            param.requires_grad = requires_grad[name]
         
         return cam, logits
     
